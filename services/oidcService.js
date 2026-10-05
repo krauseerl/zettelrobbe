@@ -16,8 +16,17 @@
  * token (issuer, audience, expiry, nonce) and the PKCE exchange.
  */
 
-const client = require('openid-client');
 const config = require('../config/config');
+
+// Loaded on first use, not at startup: an install that never turns SSO on
+// keeps running even on an image whose dependencies predate openid-client.
+let openidClient = null;
+function getOpenidClient() {
+  if (!openidClient) {
+    openidClient = require('openid-client');
+  }
+  return openidClient;
+}
 
 const CALLBACK_PATH = '/auth/oidc/callback';
 // Discovery and token requests should not leave a login hanging.
@@ -106,6 +115,7 @@ class OidcService {
    * @returns {Promise<import('openid-client').Configuration>}
    */
   async getClientConfig() {
+    const client = getOpenidClient();
     const settings = this.getSettings();
     const key = JSON.stringify([
       settings.issuerUrl,
@@ -172,6 +182,7 @@ class OidcService {
    * @returns {Promise<{ url: string, transaction: { state: string, nonce: string, codeVerifier: string, redirectUri: string } }>}
    */
   async startLogin(req) {
+    const client = getOpenidClient();
     const settings = this.getSettings();
     const clientConfig = await this.getClientConfig();
     const redirectUri = this.resolveRedirectUri(req);
@@ -207,6 +218,7 @@ class OidcService {
    * @returns {Promise<object>}
    */
   async completeLogin(callbackQuery, transaction) {
+    const client = getOpenidClient();
     const clientConfig = await this.getClientConfig();
 
     // Rebuild the callback URL from the redirect URI that was sent to the
@@ -333,7 +345,7 @@ class OidcService {
       settings.postLogoutRedirectUri ||
       `${new URL(this.resolveRedirectUri(req)).origin}/login?local=1`;
 
-    return client.buildEndSessionUrl(clientConfig, {
+    return getOpenidClient().buildEndSessionUrl(clientConfig, {
       client_id: settings.clientId,
       post_logout_redirect_uri: postLogoutRedirectUri,
     }).href;
