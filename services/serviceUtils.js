@@ -1025,6 +1025,19 @@ function estimateTokenCount(textOrLength) {
   return Math.ceil(length / 4);
 }
 
+/**
+ * Light syntax check for an e-mail address: one "@", no whitespace, and a dot
+ * in the domain. Deliverability is not checked; the address only has to be
+ * comparable with what an identity provider sends.
+ *
+ * @param {*} value
+ * @returns {boolean}
+ */
+function isValidEmail(value) {
+  const text = String(value ?? '').trim();
+  return text.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);
+}
+
 module.exports = {
   calculateTokens,
   calculateTotalPromptTokens,
@@ -1045,4 +1058,5 @@ module.exports = {
   isTimeoutError,
   buildTimeoutErrorMessage,
   estimateTokenCount,
+  isValidEmail,
 };

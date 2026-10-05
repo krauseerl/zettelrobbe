@@ -3080,6 +3080,86 @@ function initializeCustomFieldsManagement() {
   // variables bound to data-theme, so nothing has to be restyled from JS.
 }
 
+/* Username and e-mail of the signed-in account. The e-mail is what single
+   sign-on matches the identity provider's email claim against. */
+class AccountSettingsManager {
+  constructor() {
+    this.section = document.getElementById('accountSettingsSection');
+    if (!this.section || this.section.dataset.accountAvailable !== 'yes') {
+      return;
+    }
+
+    this.usernameInput = document.getElementById('accountUsername');
+    this.emailInput = document.getElementById('accountEmail');
+    this.passwordInput = document.getElementById('accountCurrentPassword');
+    this.saveBtn = document.getElementById('accountSaveBtn');
+    this.resultMessage = document.getElementById('accountResultMessage');
+
+    this.saveBtn?.addEventListener('click', () => this.save());
+  }
+
+  setMessage(type, text) {
+    if (!this.resultMessage) {
+      return;
+    }
+    this.resultMessage.className = 'zr-alert';
+    this.resultMessage.classList.add(
+      type === 'success' ? 'zr-alert--ok' : 'zr-alert--danger'
+    );
+    this.resultMessage.textContent = text;
+  }
+
+  async save() {
+    const username = String(this.usernameInput?.value || '').trim();
+    const email = String(this.emailInput?.value || '').trim();
+    const currentPassword = String(this.passwordInput?.value || '');
+
+    if (!username) {
+      this.setMessage('error', 'Username is required.');
+      return;
+    }
+    if (email && this.emailInput && !this.emailInput.checkValidity()) {
+      this.setMessage('error', 'Please enter a valid e-mail address.');
+      return;
+    }
+    if (!currentPassword) {
+      this.setMessage('error', 'Current password is required.');
+      return;
+    }
+
+    this.saveBtn.disabled = true;
+    try {
+      const response = await fetch('/api/settings/account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, email, currentPassword }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Request failed.');
+      }
+
+      if (this.passwordInput) {
+        this.passwordInput.value = '';
+      }
+      // The MFA section names the user as well.
+      const mfaUser = document.getElementById('mfaSettingsUser');
+      if (mfaUser) {
+        mfaUser.textContent = data.data.username;
+      }
+      const mfaSection = document.getElementById('mfaSettingsSection');
+      if (mfaSection) {
+        mfaSection.dataset.mfaUsername = data.data.username;
+      }
+      this.setMessage('success', data.message || 'Account updated.');
+    } catch (error) {
+      this.setMessage('error', error.message);
+    } finally {
+      this.saveBtn.disabled = false;
+    }
+  }
+}
+
 class MfaSettingsManager {
   constructor() {
     this.section = document.getElementById('mfaSettingsSection');
@@ -3627,6 +3707,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initializeRuntimeOverridePills();
   initializePublicUrlStatus();
   initializeCustomFieldsManagement();
+  new AccountSettingsManager();
   new MfaSettingsManager();
 });
 

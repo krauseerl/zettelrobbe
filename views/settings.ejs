@@ -270,6 +270,50 @@
                                 </div>
                             </section>
 
+                            <section class="zr-module" id="accountSettingsSection" data-account-available="<%= mfaSettings && mfaSettings.available ? 'yes' : 'no' %>">
+                                <div class="zr-module__head">
+                                    <h2 class="zr-module__title">Account</h2>
+                                </div>
+                                <div class="zr-module__body zr-col zr-col--loose">
+                                <% if (!(mfaSettings && mfaSettings.available)) { %>
+                                    <div class="zr-alert zr-alert--warn">
+                                        Account settings are available only for interactive user sessions (not API key authentication).
+                                    </div>
+                                <% } else { %>
+                                    <div class="zr-formgrid">
+                                        <div class="zr-field zr-field--stacked">
+                                            <label for="accountUsername" class="zr-field__name">Username</label>
+                                            <input type="text" id="accountUsername" class="zr-input" autocomplete="username"
+                                                maxlength="100" value="<%= mfaSettings.username %>">
+                                            <p class="zr-field__hint">The name you sign in with.</p>
+                                        </div>
+                                        <div class="zr-field zr-field--stacked">
+                                            <label for="accountEmail" class="zr-field__name">E-mail <span class="zr-muted">(optional)</span></label>
+                                            <input type="email" id="accountEmail" class="zr-input" autocomplete="email"
+                                                placeholder="you@example.com" value="<%= mfaSettings.email || '' %>">
+                                            <% if (mfaSettings.ssoEmailFromEnv) { %>
+                                                <p class="zr-field__hint">Single sign-on uses <strong><%= mfaSettings.ssoEmailFromEnv %></strong> from <code>OIDC_ADMIN_EMAIL</code> instead of this address.</p>
+                                            <% } else { %>
+                                                <p class="zr-field__hint">Single sign-on matches your identity provider's e-mail address against this one.</p>
+                                            <% } %>
+                                        </div>
+                                    </div>
+                                    <div class="zr-field zr-field--stacked">
+                                        <label for="accountCurrentPassword" class="zr-field__name">Current Password</label>
+                                        <input type="password" id="accountCurrentPassword" class="zr-input" autocomplete="current-password" placeholder="Enter current password">
+                                        <p class="zr-field__hint">Required to change the username or e-mail.</p>
+                                    </div>
+                                    <div class="zr-row">
+                                        <button type="button" id="accountSaveBtn" class="zr-btn zr-btn--primary">
+                                            <svg class="zr-icon zr-icon--sm" aria-hidden="true"><use href="/icons.svg#i-check"/></svg>
+                                            <span>Save account</span>
+                                        </button>
+                                    </div>
+                                    <div id="accountResultMessage" class="hidden" role="status"></div>
+                                <% } %>
+                                </div>
+                            </section>
+
                             <!-- One id only: a second id attribute is dropped by the
                                  parser, and getElementById('mfaSettingsSection')
                                  returning null silently disabled the whole MFA

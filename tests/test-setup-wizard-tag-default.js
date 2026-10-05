@@ -57,6 +57,7 @@ const elementIds = [
   'setupProgressFill',
   'setupStepLabel',
   'adminUsername',
+  'adminEmail',
   'adminPassword',
   'confirmPassword',
   'passwordHint',

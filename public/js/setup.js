@@ -72,6 +72,7 @@ class SetupWizard {
     this.form = document.getElementById('setupWizardForm');
 
     this.adminUsername = document.getElementById('adminUsername');
+    this.adminEmail = document.getElementById('adminEmail');
     this.adminPassword = document.getElementById('adminPassword');
     this.confirmPassword = document.getElementById('confirmPassword');
     this.passwordHint = document.getElementById('passwordHint');
@@ -2065,6 +2066,16 @@ class SetupWizard {
         return false;
       }
 
+      const email = String(this.adminEmail?.value || '').trim();
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        await this.showPopup({
+          icon: 'warning',
+          title: 'Invalid e-mail',
+          text: 'Please enter a valid e-mail address or leave the field empty.',
+        });
+        return false;
+      }
+
       if (password.length < 8) {
         await this.showPopup({
           icon: 'warning',
@@ -2441,6 +2452,7 @@ class SetupWizard {
       state.success && state.signature === signature;
     return {
       adminUsername: this.adminUsername.value.trim(),
+      adminEmail: String(this.adminEmail?.value || '').trim(),
       adminPassword: this.adminPassword.value,
       enableMfa: this.enableMfa.value === 'yes',
       mfaChallengeId: this.mfaState.challengeId,

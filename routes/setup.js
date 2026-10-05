@@ -22,6 +22,7 @@ const {
   classifyOcrQueueReasonFromAiError,
   stripTrailingSlashes,
   toNameList,
+  isValidEmail,
 } = require('../services/serviceUtils');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
@@ -3652,6 +3653,9 @@ const ENV_EXPORT_GROUPS = [
       'OIDC_TOKEN_AUTH_METHOD',
       'OIDC_REDIRECT_URI',
       'OIDC_SCOPES',
+      'OIDC_ADMIN_EMAIL',
+      'OIDC_EMAIL_CLAIM',
+      'OIDC_REQUIRE_VERIFIED_EMAIL',
       'OIDC_USERNAME_CLAIM',
       'OIDC_GROUPS_CLAIM',
       'OIDC_ALLOWED_GROUPS',
@@ -5362,7 +5366,8 @@ router.post(
  *       and ocrTestPassed let a caller that has just verified a connection with
  *       these exact values skip the matching probe; anything not flagged is
  *       validated here. allowFailedPaperlessTest and allowFailedAiTest still
- *       accept a connection whose validation failed.
+ *       accept a connection whose validation failed. adminEmail is optional;
+ *       when given it must be a valid e-mail address.
  *     tags:
  *       - Setup
  *     responses:
@@ -5394,6 +5399,7 @@ router.post('/api/setup/complete', express.json(), async (req, res) => {
     cleanupExpiredSetupMfaChallenges();
 
     const adminUsername = String(req.body?.adminUsername || '').trim();
+    const adminEmail = String(req.body?.adminEmail || '').trim();
     const adminPassword = String(req.body?.adminPassword || '');
     const enableMfa = parseBooleanInput(req.body?.enableMfa, false);
     const mfaChallengeId = String(req.body?.mfaChallengeId || '').trim();
@@ -5508,6 +5514,13 @@ router.post('/api/setup/complete', express.json(), async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'Password must be at least 8 characters long.',
+      });
+    }
+
+    if (adminEmail && !isValidEmail(adminEmail)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Please enter a valid e-mail address or leave it empty.',
       });
     }
 
@@ -5676,7 +5689,7 @@ router.post('/api/setup/complete', express.json(), async (req, res) => {
     });
 
     const hashedPassword = await bcrypt.hash(adminPassword, 15);
-    await documentModel.addUser(adminUsername, hashedPassword);
+    await documentModel.addUser(adminUsername, hashedPassword, adminEmail);
 
     if (enableMfa && mfaSecretToPersist) {
       await documentModel.setUserMfaSettings(
@@ -6824,6 +6837,8 @@ router.get('/settings', async (req, res) => {
         mfaSettings = {
           available: true,
           username: settingsUser.username,
+          email: settingsUser.email || '',
+          ssoEmailFromEnv: oidcService.getSettings().adminEmail || '',
           enabled: isMfaEnabledForUser(settingsUser),
         };
       }
@@ -6953,6 +6968,202 @@ router.get(
         success: false,
         error: 'Failed to detect Paperless public URL',
       });
+    }
+  }
+);
+
+// Changing the login name or the e-mail single sign-on matches on is
+// password-protected, so it gets the same budget as a login attempt.
+const accountUpdateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: parseInt(process.env.LOGIN_RATE_LIMIT_MAX || '10', 10),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: 'Too many attempts. Please wait a few minutes and try again.',
+  },
+});
+
+const MAX_USERNAME_LENGTH = 100;
+
+function hasControlCharacter(value) {
+  return [...value].some((char) => {
+    const code = char.charCodeAt(0);
+    return code < 32 || code === 127;
+  });
+}
+
+/**
+ * @swagger
+ * /api/settings/account:
+ *   post:
+ *     summary: Change the username and e-mail address of the signed-in account
+ *     description: |
+ *       Renames the account and sets or clears its e-mail address. Single
+ *       sign-on matches the identity provider's email claim against this
+ *       address. The current password is required. A new session cookie is
+ *       issued, because the session carries the username.
+ *     tags:
+ *       - Settings
+ *       - Authentication
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [username, currentPassword]
+ *             properties:
+ *               username:
+ *                 type: string
+ *                 example: "admin"
+ *               email:
+ *                 type: string
+ *                 description: Empty to remove the e-mail address
+ *                 example: "admin@example.com"
+ *               currentPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Account updated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     username:
+ *                       type: string
+ *                     email:
+ *                       type: string
+ *                       nullable: true
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: Invalid username or e-mail address
+ *       401:
+ *         description: Wrong current password
+ *       403:
+ *         description: Not a signed-in user session (for example API key authentication)
+ *       404:
+ *         description: User not found
+ *       429:
+ *         description: Too many attempts
+ *       500:
+ *         description: Server error
+ */
+router.post(
+  '/api/settings/account',
+  isAuthenticated,
+  accountUpdateLimiter,
+  express.json(),
+  async (req, res) => {
+    try {
+      const currentUsername = getAuthenticatedSettingsUsername(req);
+      if (!currentUsername) {
+        return res.status(403).json({
+          success: false,
+          error: 'Account settings require a signed-in user session.',
+        });
+      }
+
+      const newUsername = String(req.body?.username || '').trim();
+      const email = String(req.body?.email || '').trim();
+      const currentPassword = String(req.body?.currentPassword || '');
+
+      if (
+        !newUsername ||
+        newUsername.length > MAX_USERNAME_LENGTH ||
+        hasControlCharacter(newUsername)
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: `Username is required and may be at most ${MAX_USERNAME_LENGTH} characters long.`,
+        });
+      }
+
+      if (email && !isValidEmail(email)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Please enter a valid e-mail address.',
+        });
+      }
+
+      if (!currentPassword) {
+        return res.status(400).json({
+          success: false,
+          error: 'Current password is required.',
+        });
+      }
+
+      const user = await documentModel.getUser(currentUsername);
+      if (!user) {
+        return res
+          .status(404)
+          .json({ success: false, error: 'User not found.' });
+      }
+
+      if (!(await bcrypt.compare(currentPassword, user.password || ''))) {
+        return res
+          .status(401)
+          .json({ success: false, error: 'Current password is incorrect.' });
+      }
+
+      const updated = await documentModel.updateUserAccount(
+        currentUsername,
+        newUsername,
+        email || null
+      );
+      if (!updated) {
+        return res
+          .status(500)
+          .json({ success: false, error: 'Failed to update the account.' });
+      }
+
+      // The session names the user, so the old cookie would point at an
+      // account that no longer exists under that name.
+      const token = jwt.sign(
+        {
+          id: user.id,
+          username: newUsername,
+          typ: SESSION_TOKEN_TYPE,
+          ...(req.user?.auth ? { auth: req.user.auth } : {}),
+        },
+        config.getJwtSecret(),
+        { expiresIn: '24h' }
+      );
+      res.cookie('jwt', token, {
+        httpOnly: true,
+        secure: shouldUseSecureCookies(req),
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 24 * 60 * 60 * 1000,
+      });
+
+      console.log(
+        '[INFO] Account updated: username %s -> %s, e-mail %s',
+        currentUsername,
+        newUsername,
+        email ? 'set' : 'cleared'
+      );
+
+      return res.json({
+        success: true,
+        data: { username: newUsername, email: email || null },
+        message: 'Account updated.',
+      });
+    } catch (error) {
+      console.error('[ERROR] POST /api/settings/account:', error);
+      return res
+        .status(500)
+        .json({ success: false, error: 'Failed to update the account.' });
     }
   }
 );

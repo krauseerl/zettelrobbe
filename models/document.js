@@ -120,11 +120,6 @@ const emptyMetricsSummary = () => ({
   tokensOverall: 0,
 });
 
-const insertUser = db.prepare(`
-  INSERT INTO users (username, password)
-  VALUES (?, ?)
-`);
-
 // Add these prepared statements with your other ones at the top
 const getHistoryDocumentsCount = db.prepare(`
   SELECT COUNT(*) as count FROM history_documents
@@ -567,6 +562,18 @@ const MIGRATIONS = [
       database.exec(
         'CREATE INDEX IF NOT EXISTS idx_ai_run_stats_task ON ai_run_stats (task, id DESC)'
       );
+    },
+  },
+  {
+    version: 16,
+    description: 'Add email column to users table',
+    up: (database) => {
+      // The administrator's e-mail address. Single sign-on matches the
+      // identity provider's email claim against it.
+      const userColumns = database.prepare("PRAGMA table_info('users')").all();
+      if (!userColumns.some((col) => col.name === 'email')) {
+        database.exec('ALTER TABLE users ADD COLUMN email TEXT DEFAULT NULL');
+      }
     },
   },
 ];
@@ -1183,14 +1190,19 @@ module.exports = {
     }
   },
 
-  async addUser(username, password) {
+  async addUser(username, password, email = null) {
     try {
-      // Lösche alle vorhandenen Benutzer
+      // There is exactly one account: replace whatever was there before.
       const deleteResult = db.prepare('DELETE FROM users').run();
       console.log(`[DEBUG] ${deleteResult.changes} existing users deleted`);
 
-      // Füge den neuen Benutzer hinzu
-      const result = insertUser.run(username, password);
+      // Prepared here rather than at load time: the email column only exists
+      // once the startup migrations have run.
+      const result = db
+        .prepare(
+          'INSERT INTO users (username, password, email) VALUES (?, ?, ?)'
+        )
+        .run(username, password, email || null);
       if (result.changes > 0) {
         console.log(`[DEBUG] User ${username} added`);
         return true;
@@ -1217,6 +1229,21 @@ module.exports = {
     } catch (error) {
       console.error('[ERROR] getting users:', error);
       return [];
+    }
+  },
+
+  /* Renames the account and sets (or clears, with null) its e-mail address in
+     one statement. MFA, dashboard layout and changelog state live in the same
+     row and follow along. */
+  async updateUserAccount(currentUsername, newUsername, email) {
+    try {
+      const result = db
+        .prepare('UPDATE users SET username = ?, email = ? WHERE username = ?')
+        .run(newUsername, email || null, currentUsername);
+      return result.changes > 0;
+    } catch (error) {
+      console.error('[ERROR] updating user account:', error);
+      return false;
     }
   },
 

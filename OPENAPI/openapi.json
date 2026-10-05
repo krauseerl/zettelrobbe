@@ -4878,7 +4878,7 @@
     "/api/setup/complete": {
       "post": {
         "summary": "Finalize initial setup, persist env config, and trigger restart",
-        "description": "Validates the Paperless, AI and OCR connections before writing the configuration. The boolean body flags paperlessTestPassed, aiTestPassed and ocrTestPassed let a caller that has just verified a connection with these exact values skip the matching probe; anything not flagged is validated here. allowFailedPaperlessTest and allowFailedAiTest still accept a connection whose validation failed.\n",
+        "description": "Validates the Paperless, AI and OCR connections before writing the configuration. The boolean body flags paperlessTestPassed, aiTestPassed and ocrTestPassed let a caller that has just verified a connection with these exact values skip the matching probe; anything not flagged is validated here. allowFailedPaperlessTest and allowFailedAiTest still accept a connection whose validation failed. adminEmail is optional; when given it must be a valid e-mail address.\n",
         "tags": [
           "Setup"
         ],
@@ -6109,6 +6109,99 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/settings/account": {
+      "post": {
+        "summary": "Change the username and e-mail address of the signed-in account",
+        "description": "Renames the account and sets or clears its e-mail address. Single\nsign-on matches the identity provider's email claim against this\naddress. The current password is required. A new session cookie is\nissued, because the session carries the username.\n",
+        "tags": [
+          "Settings",
+          "Authentication"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "username",
+                  "currentPassword"
+                ],
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "example": "admin"
+                  },
+                  "email": {
+                    "type": "string",
+                    "description": "Empty to remove the e-mail address",
+                    "example": "admin@example.com"
+                  },
+                  "currentPassword": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Account updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "username": {
+                          "type": "string"
+                        },
+                        "email": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      }
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid username or e-mail address"
+          },
+          "401": {
+            "description": "Wrong current password"
+          },
+          "403": {
+            "description": "Not a signed-in user session (for example API key authentication)"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "429": {
+            "description": "Too many attempts"
+          },
+          "500": {
+            "description": "Server error"
           }
         }
       }
@@ -10278,7 +10371,7 @@
     "/auth/oidc/callback": {
       "get": {
         "summary": "Complete single sign-on",
-        "description": "Redirect target registered with the identity provider. Exchanges the\nauthorization code, validates the ID token, maps the identity onto the\nlocal account by OIDC_USERNAME_CLAIM (optionally limited to\nOIDC_ALLOWED_GROUPS) and sets the session cookie.\n",
+        "description": "Redirect target registered with the identity provider. Exchanges the\nauthorization code, validates the ID token, maps the identity onto the\nlocal account by its e-mail address (OIDC_EMAIL_CLAIM) or username\n(OIDC_USERNAME_CLAIM), optionally limited to OIDC_ALLOWED_GROUPS, and\nsets the session cookie.\n",
         "tags": [
           "Authentication"
         ],

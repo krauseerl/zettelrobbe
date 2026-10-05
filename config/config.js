@@ -390,6 +390,13 @@ const getOidcConfig = () => ({
   usernameClaim: String(
     process.env.OIDC_USERNAME_CLAIM || 'preferred_username'
   ).trim(),
+  emailClaim: String(process.env.OIDC_EMAIL_CLAIM || 'email').trim(),
+  // The administrator's e-mail for SSO matching, set in the environment.
+  // Takes precedence over the address stored under Settings -> Account.
+  adminEmail: String(process.env.OIDC_ADMIN_EMAIL || '').trim(),
+  // Off by default: Authentik, for one, always sends email_verified=false.
+  requireVerifiedEmail:
+    parseEnvBoolean(process.env.OIDC_REQUIRE_VERIFIED_EMAIL, 'no') === 'yes',
   groupsClaim: String(process.env.OIDC_GROUPS_CLAIM || 'groups').trim(),
   allowedGroups: splitList(process.env.OIDC_ALLOWED_GROUPS),
   providerName: String(process.env.OIDC_PROVIDER_NAME || 'SSO').trim() || 'SSO',

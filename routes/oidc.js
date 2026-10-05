@@ -114,8 +114,9 @@ router.get('/auth/oidc/login', oidcLimiter, async (req, res) => {
  *     description: |
  *       Redirect target registered with the identity provider. Exchanges the
  *       authorization code, validates the ID token, maps the identity onto the
- *       local account by OIDC_USERNAME_CLAIM (optionally limited to
- *       OIDC_ALLOWED_GROUPS) and sets the session cookie.
+ *       local account by its e-mail address (OIDC_EMAIL_CLAIM) or username
+ *       (OIDC_USERNAME_CLAIM), optionally limited to OIDC_ALLOWED_GROUPS, and
+ *       sets the session cookie.
  *     tags:
  *       - Authentication
  *     parameters:

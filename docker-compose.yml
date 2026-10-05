@@ -77,6 +77,7 @@ services:
       # - OIDC_CLIENT_ID=your_client_id
       # - OIDC_CLIENT_SECRET=your_client_secret
       # - OIDC_REDIRECT_URI=https://zettelrobbe.example.com/auth/oidc/callback
+      # - OIDC_ADMIN_EMAIL=you@example.com
       # - OIDC_PROVIDER_NAME=SSO
       # - OIDC_ALLOWED_GROUPS=zettelrobbe-users
     ports:

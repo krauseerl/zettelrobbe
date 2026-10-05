@@ -582,6 +582,36 @@ function cookieValue(response, name) {
     }
   });
 
+  // ── 6c. Matching by e-mail ────────────────────────────────────────────────
+  await test('an identity whose e-mail matches the account signs in under another username', async () => {
+    await harness.documentModel.updateUserAccount(
+      'admin',
+      'admin',
+      'Andy@Example.com'
+    );
+    provider.user = {
+      sub: 'u-9',
+      preferred_username: 'andy',
+      email: 'andy@example.com',
+      email_verified: false,
+      groups: [],
+    };
+    try {
+      const res = await fullLogin();
+      assert.strictEqual(res.status, 302);
+      assert.strictEqual(res.headers.get('location'), '/dashboard');
+      const payload = jwt.verify(cookieValue(res, 'jwt'), secret);
+      assert.strictEqual(payload.username, 'admin');
+    } finally {
+      await harness.documentModel.updateUserAccount('admin', 'admin', null);
+      provider.user = {
+        sub: 'u-1',
+        preferred_username: 'admin',
+        groups: ['zettelrobbe-users'],
+      };
+    }
+  });
+
   // ── 7. authorize() ────────────────────────────────────────────────────────
   const oidcService = require(
     path.join(REPO_ROOT, 'services', 'oidcService.js')
@@ -608,6 +638,70 @@ function cookieValue(response, name) {
       oidcService.resolveScopes({ scopes: 'profile', allowedGroups: [] }, {}),
       'openid profile'
     );
+  });
+
+  await test('authorize() prefers the e-mail address, case-insensitively', async () => {
+    const result = oidcService.authorize(
+      { email: 'ANDY@example.com', preferred_username: 'someone-else' },
+      [{ id: 1, username: 'admin', email: 'andy@Example.com' }]
+    );
+    assert.strictEqual(result.user && result.user.id, 1);
+    assert.strictEqual(result.matchedBy, 'email');
+  });
+
+  await test('authorize() falls back to the username when the e-mail does not match', async () => {
+    const result = oidcService.authorize(
+      { email: 'other@example.com', preferred_username: 'admin' },
+      [{ id: 1, username: 'admin', email: 'andy@example.com' }]
+    );
+    assert.strictEqual(result.matchedBy, 'username');
+  });
+
+  await test('authorize() ignores an account without e-mail for e-mail matching', async () => {
+    const result = oidcService.authorize({ email: 'andy@example.com' }, [
+      { id: 1, username: 'admin', email: null },
+    ]);
+    assert.strictEqual(result.user, null);
+  });
+
+  await test('OIDC_ADMIN_EMAIL takes precedence over the stored e-mail', async () => {
+    process.env.OIDC_ADMIN_EMAIL = 'Admin@Example.org';
+    try {
+      const accounts = [{ id: 1, username: 'admin', email: 'old@example.com' }];
+      const fromEnv = oidcService.authorize(
+        { email: 'admin@example.org' },
+        accounts
+      );
+      assert.strictEqual(fromEnv.matchedBy, 'email');
+      const stored = oidcService.authorize(
+        { email: 'old@example.com' },
+        accounts
+      );
+      assert.strictEqual(stored.user, null);
+    } finally {
+      delete process.env.OIDC_ADMIN_EMAIL;
+    }
+  });
+
+  await test('OIDC_REQUIRE_VERIFIED_EMAIL skips an unverified e-mail', async () => {
+    process.env.OIDC_REQUIRE_VERIFIED_EMAIL = 'yes';
+    try {
+      const accounts = [
+        { id: 1, username: 'admin', email: 'andy@example.com' },
+      ];
+      const unverified = oidcService.authorize(
+        { email: 'andy@example.com', email_verified: false },
+        accounts
+      );
+      assert.strictEqual(unverified.user, null);
+      const verified = oidcService.authorize(
+        { email: 'andy@example.com', email_verified: true },
+        accounts
+      );
+      assert.strictEqual(verified.matchedBy, 'email');
+    } finally {
+      delete process.env.OIDC_REQUIRE_VERIFIED_EMAIL;
+    }
   });
 
   await test('authorize() matches usernames case-insensitively', async () => {

@@ -129,6 +129,11 @@
                             <label for="adminUsername" class="zr-field__name">Username</label>
                             <input id="adminUsername" name="adminUsername" type="text" class="zr-input" required autocomplete="username">
                         </div>
+                        <div class="zr-field zr-field--stacked zr-formgrid__wide">
+                            <label for="adminEmail" class="zr-field__name">E-mail <span class="zr-muted">(optional)</span></label>
+                            <input id="adminEmail" name="adminEmail" type="email" class="zr-input" autocomplete="email" placeholder="you@example.com">
+                            <p class="zr-field__hint">Lets single sign-on find this account. You can add or change it later in Settings.</p>
+                        </div>
                         <div class="zr-field zr-field--stacked">
                             <label for="adminPassword" class="zr-field__name">Password</label>
                             <input id="adminPassword" name="adminPassword" type="password" class="zr-input" required autocomplete="new-password" minlength="8">

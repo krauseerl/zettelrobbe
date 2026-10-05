@@ -8,9 +8,10 @@
  *
  * Zettelrobbe has exactly one local account (the setup wizard creates it and
  * addUser() replaces any previous one), so SSO does not provision users. An
- * identity from the provider is mapped onto that existing account by a claim
- * (OIDC_USERNAME_CLAIM, preferred_username by default) and can be further
- * limited to members of OIDC_ALLOWED_GROUPS. Every other identity is refused.
+ * identity from the provider is mapped onto that existing account by its
+ * e-mail address (OIDC_EMAIL_CLAIM) or, failing that, its username
+ * (OIDC_USERNAME_CLAIM), and can be further limited to members of
+ * OIDC_ALLOWED_GROUPS. Every other identity is refused.
  *
  * The protocol work is delegated to openid-client, which validates the ID
  * token (issuer, audience, expiry, nonce) and the PKCE exchange.
@@ -157,6 +158,18 @@ function buildClientAuthentication(client, method, clientSecret) {
   return method === 'client_secret_post'
     ? client.ClientSecretPost(clientSecret)
     : client.ClientSecretBasic(clientSecret);
+}
+
+/**
+ * A claim as a trimmed, non-empty string, or null.
+ *
+ * @param {object} claims
+ * @param {string} name
+ * @returns {string|null}
+ */
+function readStringClaim(claims, name) {
+  const value = readClaim(claims, name);
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 class OidcService {
@@ -422,23 +435,29 @@ class OidcService {
    * Decides whether an identity may sign in and which local account it maps
    * to. Pure: it only looks at the claims and the given list of users.
    *
+   * The e-mail address is tried first: OIDC_EMAIL_CLAIM against
+   * OIDC_ADMIN_EMAIL or, when that is not set, the e-mail stored with the
+   * account (case-insensitive). Then OIDC_USERNAME_CLAIM against
+   * the username (exact, then case-insensitive). With
+   * OIDC_REQUIRE_VERIFIED_EMAIL=yes an e-mail only counts when the provider
+   * marks it email_verified.
+   *
    * @param {object} claims - the user's claims from completeLogin()
-   * @param {Array<{ id: number, username: string }>} users - local accounts
-   * @returns {{ user: object|null, error: string|null, claimedUsername: string|null }}
+   * @param {Array<{ id: number, username: string, email?: string|null }>} users - local accounts
+   * @returns {{ user: object|null, error: string|null, claimedUsername: string|null, matchedBy: 'email'|'username'|null }}
    */
   authorize(claims, users) {
     const settings = this.getSettings();
-    const rawUsername = readClaim(claims, settings.usernameClaim);
-    const claimedUsername =
-      typeof rawUsername === 'string' && rawUsername.trim()
-        ? rawUsername.trim()
-        : null;
+    const claimedEmail = readStringClaim(claims, settings.emailClaim);
+    const claimedUsername = readStringClaim(claims, settings.usernameClaim);
+    const identity = claimedEmail || claimedUsername;
 
-    if (!claimedUsername) {
+    if (!claimedEmail && !claimedUsername) {
       return {
         user: null,
         claimedUsername: null,
-        error: `The identity provider did not send the "${settings.usernameClaim}" claim. Check OIDC_USERNAME_CLAIM and the scopes requested in OIDC_SCOPES.`,
+        matchedBy: null,
+        error: `The identity provider sent neither the "${settings.emailClaim}" nor the "${settings.usernameClaim}" claim. Check OIDC_EMAIL_CLAIM, OIDC_USERNAME_CLAIM and the scopes requested in OIDC_SCOPES.`,
       };
     }
 
@@ -450,33 +469,65 @@ class OidcService {
       if (!allowed) {
         return {
           user: null,
-          claimedUsername,
+          claimedUsername: identity,
+          matchedBy: null,
           error: 'Your account is not in a group that may use Zettelrobbe.',
         };
       }
     }
 
     const list = Array.isArray(users) ? users : [];
-    const exact = list.find((user) => user.username === claimedUsername);
-    const folded = claimedUsername.toLowerCase();
-    const match =
-      exact ||
-      list.find(
-        (user) =>
-          typeof user.username === 'string' &&
-          user.username.toLowerCase() === folded
-      );
 
-    if (!match) {
-      return {
-        user: null,
-        claimedUsername,
-        error:
-          'No Zettelrobbe account matches your single sign-on identity. Ask the administrator to align the usernames.',
-      };
+    const emailUsable =
+      claimedEmail &&
+      (!settings.requireVerifiedEmail || claims.email_verified === true);
+    if (emailUsable) {
+      const folded = claimedEmail.toLowerCase();
+      // OIDC_ADMIN_EMAIL, set by the operator, stands in for the e-mail
+      // stored with the (single) account.
+      const byEmail = list.find((user) => {
+        const accountEmail = settings.adminEmail || user.email;
+        return (
+          typeof accountEmail === 'string' &&
+          accountEmail.trim().toLowerCase() === folded
+        );
+      });
+      if (byEmail) {
+        return {
+          user: byEmail,
+          claimedUsername: identity,
+          matchedBy: 'email',
+          error: null,
+        };
+      }
     }
 
-    return { user: match, claimedUsername, error: null };
+    if (claimedUsername) {
+      const folded = claimedUsername.toLowerCase();
+      const byUsername =
+        list.find((user) => user.username === claimedUsername) ||
+        list.find(
+          (user) =>
+            typeof user.username === 'string' &&
+            user.username.toLowerCase() === folded
+        );
+      if (byUsername) {
+        return {
+          user: byUsername,
+          claimedUsername: identity,
+          matchedBy: 'username',
+          error: null,
+        };
+      }
+    }
+
+    return {
+      user: null,
+      claimedUsername: identity,
+      matchedBy: null,
+      error:
+        'No Zettelrobbe account matches your single sign-on identity. The e-mail address (or username) at your identity provider must match the Zettelrobbe account.',
+    };
   }
 
   /**
