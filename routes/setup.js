@@ -44,6 +44,7 @@ const entityNameMatcher = require('../services/entityNameMatcher');
 const entityMatchAiService = require('../services/entityMatchAiService');
 const duplicateReviewJobService = require('../services/duplicateReviewJobService');
 const tagSimplifyService = require('../services/tagSimplifyService');
+const oidcService = require('../services/oidcService');
 const {
   THUMBNAIL_CACHE_DIR,
   getThumbnailCachePath,
@@ -89,6 +90,7 @@ const SETTINGS_SECRET_FIELDS = [
   'OCR_API_KEY',
   'MISTRAL_API_KEY',
   'API_KEY',
+  'OIDC_CLIENT_SECRET',
 ];
 
 function formatBytes(bytes) {
@@ -395,8 +397,17 @@ const loginLimiter = rateLimit({
  *           example: "#FF5733"
  */
 
-// Routes that don't require authentication
-let PUBLIC_ROUTES = ['/health', '/login', '/logout', '/setup', '/api/setup'];
+// Routes that don't require authentication. /auth/oidc is served by
+// routes/oidc.js, mounted ahead of this router; it is listed so the sign-in
+// callback stays reachable whatever the mount order.
+let PUBLIC_ROUTES = [
+  '/health',
+  '/login',
+  '/logout',
+  '/setup',
+  '/api/setup',
+  '/auth/oidc',
+];
 
 /**
  * Returns true if the incoming request originates from localhost.
@@ -746,6 +757,7 @@ function renderLoginView(res, options = {}) {
     error: options.error || null,
     mfaRequired: Boolean(options.mfaRequired),
     username: options.username || '',
+    oidc: oidcService.getLoginViewState(),
   });
 }
 
@@ -758,6 +770,13 @@ router.get('/login', (req, res) => {
   documentModel.getUsers().then((users) => {
     if (users.length === 0) {
       res.redirect('setup');
+    } else if (
+      oidcService.getLoginViewState().autoRedirect &&
+      req.query.local === undefined
+    ) {
+      // OIDC_AUTO_REDIRECT skips the form; /login?local=1 still reaches it,
+      // so the local account stays usable when the provider is down.
+      res.redirect('/auth/oidc/login');
     } else {
       renderLoginView(res);
     }
@@ -977,14 +996,16 @@ router.post('/login', loginLimiter, async (req, res) => {
  *       cookie. After logging out, the user is redirected to the login page.
  *
  *       This endpoint also clears any session-related data stored on the server side
- *       for the current user.
+ *       for the current user. A session that was opened through single sign-on is
+ *       redirected to the identity provider's end-session endpoint instead when
+ *       OIDC_PROVIDER_LOGOUT=yes.
  *     tags:
  *       - Authentication
  *     security:
  *       - BearerAuth: []
  *     responses:
  *       302:
- *         description: Logout successful, redirected to login page
+ *         description: Logout successful, redirected to the login page (or to the identity provider's end-session endpoint)
  *         headers:
  *           Location:
  *             schema:
@@ -1001,11 +1022,37 @@ router.post('/login', loginLimiter, async (req, res) => {
  *             schema:
  *               $ref: '#/components/schemas/Error'
  */
-router.get('/logout', (req, res) => {
+router.get('/logout', async (req, res) => {
+  const jwtSecret = config.getJwtSecret();
+  const sessionToken = req.cookies?.jwt;
+  const session =
+    jwtSecret && sessionToken
+      ? verifySessionToken(sessionToken, jwtSecret)
+      : null;
+
   res.clearCookie('jwt');
   res.clearCookie(MFA_CHALLENGE_COOKIE);
   res.clearCookie(MFA_SETUP_COOKIE);
-  res.redirect('/login');
+
+  // A single sign-on session can also be ended at the provider
+  // (OIDC_PROVIDER_LOGOUT=yes); otherwise the next SSO login would pass
+  // straight through on the provider's still-open session.
+  if (session?.auth === 'oidc') {
+    try {
+      const providerLogoutUrl = await oidcService.buildLogoutUrl(req);
+      if (providerLogoutUrl) {
+        return res.redirect(providerLogoutUrl);
+      }
+    } catch (error) {
+      console.warn('[WARN] OIDC provider logout skipped:', error.message);
+    }
+  }
+
+  // With OIDC_AUTO_REDIRECT the plain /login would sign the user straight
+  // back in through the provider.
+  res.redirect(
+    oidcService.getLoginViewState().autoRedirect ? '/login?local=1' : '/login'
+  );
 });
 
 /**
@@ -3593,6 +3640,24 @@ const ENV_EXPORT_GROUPS = [
       'GLOBAL_RATE_LIMIT_MAX',
       'EXPOSE_API_DOCS',
       'CONFIG_SOURCE_MODE',
+    ],
+  },
+  {
+    title: 'Single sign-on (OIDC)',
+    keys: [
+      'OIDC_ENABLED',
+      'OIDC_ISSUER_URL',
+      'OIDC_CLIENT_ID',
+      'OIDC_CLIENT_SECRET',
+      'OIDC_REDIRECT_URI',
+      'OIDC_SCOPES',
+      'OIDC_USERNAME_CLAIM',
+      'OIDC_GROUPS_CLAIM',
+      'OIDC_ALLOWED_GROUPS',
+      'OIDC_PROVIDER_NAME',
+      'OIDC_AUTO_REDIRECT',
+      'OIDC_PROVIDER_LOGOUT',
+      'OIDC_POST_LOGOUT_REDIRECT_URI',
     ],
   },
   {

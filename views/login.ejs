@@ -116,6 +116,17 @@
                     </button>
                 </div>
             </form>
+
+            <% const sso = typeof oidc === 'object' && oidc ? oidc : { enabled: false }; %>
+            <% if (sso.enabled && !isMfaStep) { %>
+                <div class="zr-col login-sso" data-login-sso>
+                    <div class="login-sso__divider zr-sm"><span>or</span></div>
+                    <a href="/auth/oidc/login" class="zr-btn zr-btn--lg zr-btn--block" id="ssoButton">
+                        <svg class="zr-icon zr-icon--sm" aria-hidden="true"><use href="/icons.svg#i-key"/></svg>
+                        <span>Sign in with <%= sso.providerName %></span>
+                    </a>
+                </div>
+            <% } %>
         </section>
     </div>
 

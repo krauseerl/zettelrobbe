@@ -368,6 +368,37 @@ const getCookieSecureMode = () => {
   return 'auto';
 };
 
+/* Single sign-on through OpenID Connect. Read on every call rather than
+   snapshotted at load, like the other auth getters above, so a runtime
+   override or a test can change it without reloading the module. Off unless
+   OIDC_ENABLED is set; local sign-in keeps working either way. */
+const splitList = (value) =>
+  String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const getOidcConfig = () => ({
+  enabled: parseEnvBoolean(process.env.OIDC_ENABLED, 'no') === 'yes',
+  issuerUrl: String(process.env.OIDC_ISSUER_URL || '').trim(),
+  clientId: String(process.env.OIDC_CLIENT_ID || '').trim(),
+  clientSecret: String(process.env.OIDC_CLIENT_SECRET || ''),
+  redirectUri: String(process.env.OIDC_REDIRECT_URI || '').trim(),
+  scopes: String(process.env.OIDC_SCOPES || 'openid profile email').trim(),
+  usernameClaim: String(
+    process.env.OIDC_USERNAME_CLAIM || 'preferred_username'
+  ).trim(),
+  groupsClaim: String(process.env.OIDC_GROUPS_CLAIM || 'groups').trim(),
+  allowedGroups: splitList(process.env.OIDC_ALLOWED_GROUPS),
+  providerName: String(process.env.OIDC_PROVIDER_NAME || 'SSO').trim() || 'SSO',
+  autoRedirect: parseEnvBoolean(process.env.OIDC_AUTO_REDIRECT, 'no') === 'yes',
+  providerLogout:
+    parseEnvBoolean(process.env.OIDC_PROVIDER_LOGOUT, 'no') === 'yes',
+  postLogoutRedirectUri: String(
+    process.env.OIDC_POST_LOGOUT_REDIRECT_URI || ''
+  ).trim(),
+});
+
 // Initialize limit functions with defaults
 const limitFunctions = {
   activateTagging: parseEnvBoolean(process.env.ACTIVATE_TAGGING, 'yes'),
@@ -440,6 +471,7 @@ module.exports = {
   getJwtSecret,
   getTrustProxy,
   getCookieSecureMode,
+  getOidcConfig,
   isProtectedRuntimeEnvKey,
   get apiKey() {
     return getApiKey();

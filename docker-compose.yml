@@ -67,6 +67,16 @@ services:
       # Update check (optional) – asks GitHub once a day whether a newer release
       # exists. Set to 'no' for air-gapped installations; nothing else changes.
       # - UPDATE_CHECK_ENABLED=no
+      # Single sign-on through OpenID Connect (optional) – Authentik, Authelia,
+      # Keycloak, ... The identity is mapped onto the existing local account by
+      # OIDC_USERNAME_CLAIM; password login keeps working.
+      # - OIDC_ENABLED=yes
+      # - OIDC_ISSUER_URL=https://auth.example.com/application/o/zettelrobbe/
+      # - OIDC_CLIENT_ID=your_client_id
+      # - OIDC_CLIENT_SECRET=your_client_secret
+      # - OIDC_REDIRECT_URI=https://zettelrobbe.example.com/auth/oidc/callback
+      # - OIDC_PROVIDER_NAME=Authentik
+      # - OIDC_ALLOWED_GROUPS=zettelrobbe-users
     ports:
       - '3000:${PAPERLESS_AI_PORT:-3000}'
     volumes:

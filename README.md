@@ -140,6 +140,46 @@ Then open [http://localhost:3000](http://localhost:3000) to complete setup.
 - The Mistral OCR provider processes PDFs natively and ignores the `OCR_PDF_RENDER_*` settings
 - The OCR queue can be worked through automatically instead of pressing **Process All Pending**: enable `OCR_AUTO_PROCESS_ENABLED` (default `no`) and configure `OCR_AUTO_PROCESS_INTERVAL` (cron, default `*/15 * * * *`), `OCR_AUTO_PROCESS_BATCH_SIZE` (documents per run, default `10`) and `OCR_AUTO_ANALYZE` (run AI analysis right after OCR, default `yes`). Runs are skipped while a document scan is active or while Paperless-ngx is unreachable, so queued documents are never marked as failed because of an outage
 
+### Single Sign-On (OIDC)
+
+Zettelrobbe can sign you in through any OpenID Connect provider (Authentik, Authelia, Keycloak, ...). It is off by default, and the local username/password login keeps working next to it.
+
+Zettelrobbe has a single local account, so SSO does not create users: the identity from the provider is mapped onto that account by a claim (`preferred_username` by default) and anyone who does not match is refused. Local TOTP is not asked for on an SSO login — enforce MFA at the provider instead.
+
+| Variable                        | Default                  | Purpose                                                                                                                                          |
+| ------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `OIDC_ENABLED`                  | `no`                     | Turns single sign-on on                                                                                                                          |
+| `OIDC_ISSUER_URL`               | –                        | Issuer URL; discovery is read from `<issuer>/.well-known/openid-configuration` and the issuer must match it exactly (including a trailing slash) |
+| `OIDC_CLIENT_ID`                | –                        | Client ID                                                                                                                                        |
+| `OIDC_CLIENT_SECRET`            | –                        | Client secret; leave empty for a public client (PKCE is always used)                                                                             |
+| `OIDC_REDIRECT_URI`             | derived from the request | Must equal the URI registered at the provider: `https://<your-host>/auth/oidc/callback`. Set it explicitly behind a reverse proxy                |
+| `OIDC_SCOPES`                   | `openid profile email`   | Requested scopes                                                                                                                                 |
+| `OIDC_USERNAME_CLAIM`           | `preferred_username`     | Claim compared (exact, then case-insensitive) with the local username, e.g. `email`                                                              |
+| `OIDC_GROUPS_CLAIM`             | `groups`                 | Claim holding the user's groups                                                                                                                  |
+| `OIDC_ALLOWED_GROUPS`           | –                        | Comma-separated; when set, only members of one of these groups may sign in                                                                       |
+| `OIDC_PROVIDER_NAME`            | `SSO`                    | Button label: "Sign in with …"                                                                                                                   |
+| `OIDC_AUTO_REDIRECT`            | `no`                     | Send `/login` straight to the provider; `/login?local=1` still shows the password form                                                           |
+| `OIDC_PROVIDER_LOGOUT`          | `no`                     | Also end the session at the provider (RP-initiated logout) when an SSO user logs out                                                             |
+| `OIDC_POST_LOGOUT_REDIRECT_URI` | `<origin>/login?local=1` | Where the provider sends the browser after provider logout                                                                                       |
+
+**Authentik setup**
+
+1. _Applications → Providers → Create → OAuth2/OpenID Provider_: client type **Confidential**, redirect URI (strict) `https://<your-zettelrobbe-host>/auth/oidc/callback`, signing key e.g. _authentik Self-signed Certificate_. Keep the default scopes `openid`, `profile` and `email` — the `profile` mapping supplies `preferred_username` and `groups`.
+2. _Applications → Applications → Create_: pick a slug (e.g. `zettelrobbe`) and attach the provider. Optionally bind a group or policy to restrict who may open it.
+3. Configure Zettelrobbe:
+
+```yaml
+environment:
+  - OIDC_ENABLED=yes
+  - OIDC_ISSUER_URL=https://<your-authentik-host>/application/o/zettelrobbe/
+  - OIDC_CLIENT_ID=<client id from the provider>
+  - OIDC_CLIENT_SECRET=<client secret from the provider>
+  - OIDC_REDIRECT_URI=https://<your-zettelrobbe-host>/auth/oidc/callback
+  - OIDC_PROVIDER_NAME=Authentik
+```
+
+Your Authentik username must equal the Zettelrobbe username (case-insensitive). If it does not, point `OIDC_USERNAME_CLAIM` at a claim that does (for example `email` when the local username is your e-mail address).
+
 ### Container Images
 
 | Image Tag                         | Size        |

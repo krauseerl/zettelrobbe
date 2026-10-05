@@ -11,6 +11,7 @@ const documentModel = require('./models/document');
 const setupService = require('./services/setupService');
 const { runStartupMigrations } = require('./services/startupMigrations');
 const setupRoutes = require('./routes/setup');
+const oidcRoutes = require('./routes/oidc');
 const { isAuthenticated } = require('./routes/auth');
 const mistralOcrService = require('./services/mistralOcrService');
 const ocrAutoProcessService = require('./services/ocrAutoProcessService');
@@ -1075,6 +1076,9 @@ async function scanDocuments(source = 'scheduler') {
 }
 
 // Routes
+// Single sign-on comes first: its callback must be reachable without a
+// session, before the setup router's authentication guard runs.
+app.use('/', oidcRoutes);
 app.use('/', setupRoutes);
 
 // Development-only reference page for the zr UI framework. It ships no product

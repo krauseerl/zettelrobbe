@@ -108,4 +108,20 @@
   .login-back-button {
     align-self: center;
   }
+
+  /* login: "or" rule between the password form and the single sign-on
+     button. */
+  .login-sso__divider {
+    display: flex;
+    align-items: center;
+    gap: var(--zr-3);
+    color: var(--zr-text-faint);
+  }
+  .login-sso__divider::before,
+  .login-sso__divider::after {
+    content: '';
+    flex: 1 1 auto;
+    height: 1px;
+    background: var(--zr-line);
+  }
 }
