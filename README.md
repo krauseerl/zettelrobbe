@@ -142,43 +142,45 @@ Then open [http://localhost:3000](http://localhost:3000) to complete setup.
 
 ### Single Sign-On (OIDC)
 
-Zettelrobbe can sign you in through any OpenID Connect provider (Authentik, Authelia, Keycloak, ...). It is off by default, and the local username/password login keeps working next to it.
+Zettelrobbe can sign you in through any standards-compliant OpenID Connect provider: Authentik, Authelia, Keycloak, Kanidm, Pocket ID, Zitadel, Microsoft Entra ID, Google and others. Nothing is provider-specific: endpoints, signing keys and supported client authentication methods are read from the provider's discovery document. It is off by default, and the local username/password login keeps working next to it.
 
 Zettelrobbe has a single local account, so SSO does not create users: the identity from the provider is mapped onto that account by a claim (`preferred_username` by default) and anyone who does not match is refused. Local TOTP is not asked for on an SSO login — enforce MFA at the provider instead.
 
-| Variable                        | Default                  | Purpose                                                                                                                                          |
-| ------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `OIDC_ENABLED`                  | `no`                     | Turns single sign-on on                                                                                                                          |
-| `OIDC_ISSUER_URL`               | –                        | Issuer URL; discovery is read from `<issuer>/.well-known/openid-configuration` and the issuer must match it exactly (including a trailing slash) |
-| `OIDC_CLIENT_ID`                | –                        | Client ID                                                                                                                                        |
-| `OIDC_CLIENT_SECRET`            | –                        | Client secret; leave empty for a public client (PKCE is always used)                                                                             |
-| `OIDC_REDIRECT_URI`             | derived from the request | Must equal the URI registered at the provider: `https://<your-host>/auth/oidc/callback`. Set it explicitly behind a reverse proxy                |
-| `OIDC_SCOPES`                   | `openid profile email`   | Requested scopes                                                                                                                                 |
-| `OIDC_USERNAME_CLAIM`           | `preferred_username`     | Claim compared (exact, then case-insensitive) with the local username, e.g. `email`                                                              |
-| `OIDC_GROUPS_CLAIM`             | `groups`                 | Claim holding the user's groups                                                                                                                  |
-| `OIDC_ALLOWED_GROUPS`           | –                        | Comma-separated; when set, only members of one of these groups may sign in                                                                       |
-| `OIDC_PROVIDER_NAME`            | `SSO`                    | Button label: "Sign in with …"                                                                                                                   |
-| `OIDC_AUTO_REDIRECT`            | `no`                     | Send `/login` straight to the provider; `/login?local=1` still shows the password form                                                           |
-| `OIDC_PROVIDER_LOGOUT`          | `no`                     | Also end the session at the provider (RP-initiated logout) when an SSO user logs out                                                             |
-| `OIDC_POST_LOGOUT_REDIRECT_URI` | `<origin>/login?local=1` | Where the provider sends the browser after provider logout                                                                                       |
+| Variable                        | Default                  | Purpose                                                                                                                                                                                                                                                                          |
+| ------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OIDC_ENABLED`                  | `no`                     | Turns single sign-on on                                                                                                                                                                                                                                                          |
+| `OIDC_ISSUER_URL`               | –                        | The provider's issuer URL (see the table below), or its full `/.well-known/openid-configuration` URL. A missing or extra trailing slash is tolerated                                                                                                                             |
+| `OIDC_CLIENT_ID`                | –                        | Client ID                                                                                                                                                                                                                                                                        |
+| `OIDC_CLIENT_SECRET`            | –                        | Client secret; leave empty for a public client (PKCE is always used)                                                                                                                                                                                                             |
+| `OIDC_TOKEN_AUTH_METHOD`        | automatic                | `client_secret_basic`, `client_secret_post` or `none`. Automatic: `none` without a secret, otherwise `client_secret_basic` (the specification's default) unless the provider only lists `client_secret_post`. Set it when the provider requires a specific method for the client |
+| `OIDC_REDIRECT_URI`             | derived from the request | Must equal the URI registered at the provider: `https://<your-host>/auth/oidc/callback`. Set it explicitly behind a reverse proxy                                                                                                                                                |
+| `OIDC_SCOPES`                   | `openid profile email`   | Requested scopes; `groups` is added automatically when `OIDC_ALLOWED_GROUPS` is set and the provider advertises that scope                                                                                                                                                       |
+| `OIDC_USERNAME_CLAIM`           | `preferred_username`     | Claim compared (exact, then case-insensitive) with the local username, e.g. `email`. Dotted paths reach nested claims                                                                                                                                                            |
+| `OIDC_GROUPS_CLAIM`             | `groups`                 | Claim holding the user's groups (dotted paths allowed, e.g. `realm_access.roles`)                                                                                                                                                                                                |
+| `OIDC_ALLOWED_GROUPS`           | –                        | Comma-separated; when set, only members of one of these groups may sign in                                                                                                                                                                                                       |
+| `OIDC_PROVIDER_NAME`            | `SSO`                    | Button label: "Sign in with …"                                                                                                                                                                                                                                                   |
+| `OIDC_AUTO_REDIRECT`            | `no`                     | Send `/login` straight to the provider; `/login?local=1` still shows the password form                                                                                                                                                                                           |
+| `OIDC_PROVIDER_LOGOUT`          | `no`                     | Also end the session at the provider (RP-initiated logout) when an SSO user logs out, if the provider advertises an `end_session_endpoint`                                                                                                                                       |
+| `OIDC_POST_LOGOUT_REDIRECT_URI` | `<origin>/login?local=1` | Where the provider sends the browser after provider logout; register it at the provider if it validates this URI                                                                                                                                                                 |
 
-**Authentik setup**
+**Setting up any provider**
 
-1. _Applications → Providers → Create → OAuth2/OpenID Provider_: client type **Confidential**, redirect URI (strict) `https://<your-zettelrobbe-host>/auth/oidc/callback`, signing key e.g. _authentik Self-signed Certificate_. Keep the default scopes `openid`, `profile` and `email` — the `profile` mapping supplies `preferred_username` and `groups`.
-2. _Applications → Applications → Create_: pick a slug (e.g. `zettelrobbe`) and attach the provider. Optionally bind a group or policy to restrict who may open it.
-3. Configure Zettelrobbe:
+1. Register a client / application at the provider: authorization code flow, confidential client (or public with PKCE), redirect URI `https://<your-zettelrobbe-host>/auth/oidc/callback`, scopes `openid profile email`.
+2. Set `OIDC_ENABLED=yes`, `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` and `OIDC_REDIRECT_URI`.
+3. Make sure the claim in `OIDC_USERNAME_CLAIM` carries your Zettelrobbe username, or switch it to a claim that does (for example `email` when the local username is your e-mail address).
 
-```yaml
-environment:
-  - OIDC_ENABLED=yes
-  - OIDC_ISSUER_URL=https://<your-authentik-host>/application/o/zettelrobbe/
-  - OIDC_CLIENT_ID=<client id from the provider>
-  - OIDC_CLIENT_SECRET=<client secret from the provider>
-  - OIDC_REDIRECT_URI=https://<your-zettelrobbe-host>/auth/oidc/callback
-  - OIDC_PROVIDER_NAME=Authentik
-```
+Issuer URLs and notes for common providers:
 
-Your Authentik username must equal the Zettelrobbe username (case-insensitive). If it does not, point `OIDC_USERNAME_CLAIM` at a claim that does (for example `email` when the local username is your e-mail address).
+| Provider           | `OIDC_ISSUER_URL`                                    | Notes                                                                                                                                                                                             |
+| ------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Authentik          | `https://<host>/application/o/<app-slug>/`           | Default `profile` scope carries `preferred_username` and `groups`                                                                                                                                 |
+| Authelia           | `https://<authelia-host>`                            | Groups need the `groups` scope (added automatically with `OIDC_ALLOWED_GROUPS`); the client's `token_endpoint_auth_method` defaults to `client_secret_basic`, which is also Zettelrobbe's default |
+| Keycloak           | `https://<host>/realms/<realm>`                      | For groups, add a _Group Membership_ mapper with claim name `groups` (full group path off)                                                                                                        |
+| Kanidm             | `https://<host>/oauth2/openid/<client-id>`           | Issuer is per client                                                                                                                                                                              |
+| Pocket ID          | `https://<pocket-id-host>`                           |                                                                                                                                                                                                   |
+| Zitadel            | `https://<instance-domain>`                          |                                                                                                                                                                                                   |
+| Microsoft Entra ID | `https://login.microsoftonline.com/<tenant-id>/v2.0` | `preferred_username` is the UPN; the `groups` claim holds group object IDs                                                                                                                        |
+| Google             | `https://accounts.google.com`                        | No `preferred_username`: set `OIDC_USERNAME_CLAIM=email`                                                                                                                                          |
 
 ### Container Images
 

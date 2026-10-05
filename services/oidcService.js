@@ -68,6 +68,97 @@ function toGroupList(value) {
   return [];
 }
 
+const TOKEN_AUTH_METHODS = [
+  'client_secret_basic',
+  'client_secret_post',
+  'none',
+];
+
+function stripTrailingSlash(value) {
+  return String(value).replace(/\/+$/, '');
+}
+
+/**
+ * Picks how the client authenticates at the token endpoint.
+ *
+ * OIDC_TOKEN_AUTH_METHOD wins when set. Without a client secret the client is
+ * public ("none"). Otherwise client_secret_basic, the method the OAuth 2.0
+ * and OpenID Connect specifications make the default, unless the provider's
+ * discovery document lists only client_secret_post. This matters: Authelia,
+ * for one, accepts only the method registered for the client and defaults to
+ * client_secret_basic.
+ *
+ * @param {{ tokenAuthMethod: string, clientSecret: string }} settings
+ * @param {{ token_endpoint_auth_methods_supported?: string[] }} serverMetadata
+ * @returns {string}
+ */
+function selectTokenAuthMethod(settings, serverMetadata) {
+  const configured = String(settings.tokenAuthMethod || '')
+    .trim()
+    .toLowerCase();
+  if (configured) {
+    if (!TOKEN_AUTH_METHODS.includes(configured)) {
+      throw new Error(
+        `Unsupported OIDC_TOKEN_AUTH_METHOD "${configured}". Use one of: ${TOKEN_AUTH_METHODS.join(', ')}.`
+      );
+    }
+    return configured;
+  }
+
+  if (!settings.clientSecret) {
+    return 'none';
+  }
+
+  const supported = serverMetadata?.token_endpoint_auth_methods_supported;
+  if (
+    Array.isArray(supported) &&
+    !supported.includes('client_secret_basic') &&
+    supported.includes('client_secret_post')
+  ) {
+    return 'client_secret_post';
+  }
+  return 'client_secret_basic';
+}
+
+/**
+ * The scopes to request. Some providers (Authelia, for one) only release the
+ * groups claim for a dedicated "groups" scope, so when OIDC_ALLOWED_GROUPS is
+ * in use and the provider advertises that scope, it is added. A provider that
+ * does not advertise it is never sent a scope it might reject.
+ *
+ * @param {{ scopes: string, allowedGroups: string[] }} settings
+ * @param {{ scopes_supported?: string[] }} serverMetadata
+ * @returns {string}
+ */
+function resolveScopes(settings, serverMetadata) {
+  const scopes = settings.scopes.split(/\s+/).filter(Boolean);
+  if (!scopes.includes('openid')) {
+    scopes.unshift('openid');
+  }
+  const supported = serverMetadata?.scopes_supported;
+  if (
+    settings.allowedGroups.length > 0 &&
+    !scopes.includes('groups') &&
+    Array.isArray(supported) &&
+    supported.includes('groups')
+  ) {
+    scopes.push('groups');
+  }
+  return scopes.join(' ');
+}
+
+function buildClientAuthentication(client, method, clientSecret) {
+  if (method === 'none') return client.None();
+  if (!clientSecret) {
+    throw new Error(
+      `OIDC_TOKEN_AUTH_METHOD=${method} needs OIDC_CLIENT_SECRET to be set.`
+    );
+  }
+  return method === 'client_secret_post'
+    ? client.ClientSecretPost(clientSecret)
+    : client.ClientSecretBasic(clientSecret);
+}
+
 class OidcService {
   constructor() {
     this._clientConfigPromise = null;
@@ -115,21 +206,46 @@ class OidcService {
    * @returns {Promise<import('openid-client').Configuration>}
    */
   async getClientConfig() {
-    const client = getOpenidClient();
     const settings = this.getSettings();
     const key = JSON.stringify([
       settings.issuerUrl,
       settings.clientId,
       settings.clientSecret,
+      settings.tokenAuthMethod,
     ]);
 
     if (this._clientConfigPromise && this._clientConfigKey === key) {
       return this._clientConfigPromise;
     }
 
+    this._clientConfigKey = key;
+    this._clientConfigPromise = this._buildClientConfig(settings).catch(
+      (error) => {
+        if (this._clientConfigKey === key) {
+          this._clientConfigPromise = null;
+          this._clientConfigKey = null;
+        }
+        throw error;
+      }
+    );
+
+    return this._clientConfigPromise;
+  }
+
+  /**
+   * Reads the provider's discovery document and builds the client from it.
+   * The token endpoint authentication method is chosen only after discovery,
+   * because it depends on what the provider advertises.
+   *
+   * @param {ReturnType<typeof config.getOidcConfig>} settings
+   * @returns {Promise<import('openid-client').Configuration>}
+   */
+  async _buildClientConfig(settings) {
+    const client = getOpenidClient();
     const issuer = new URL(settings.issuerUrl);
+    const insecure = issuer.protocol === 'http:';
     const options = { timeout: REQUEST_TIMEOUT_SECONDS };
-    if (issuer.protocol === 'http:') {
+    if (insecure) {
       // Plain HTTP is only acceptable on a trusted network, but homelab
       // providers often run that way behind the same reverse proxy.
       console.warn(
@@ -138,24 +254,64 @@ class OidcService {
       options.execute = [client.allowInsecureRequests];
     }
 
-    this._clientConfigKey = key;
-    this._clientConfigPromise = client
-      .discovery(
+    const serverMetadata = await this._discover(
+      client,
+      issuer,
+      settings,
+      options
+    );
+    const authMethod = selectTokenAuthMethod(settings, serverMetadata);
+
+    const clientConfig = new client.Configuration(
+      serverMetadata,
+      settings.clientId,
+      undefined,
+      buildClientAuthentication(client, authMethod, settings.clientSecret)
+    );
+    clientConfig.timeout = REQUEST_TIMEOUT_SECONDS;
+    if (insecure) {
+      client.allowInsecureRequests(clientConfig);
+    }
+    return clientConfig;
+  }
+
+  /**
+   * Runs discovery and returns the provider metadata. OpenID Connect demands
+   * that the configured issuer equals the advertised one character for
+   * character, and providers disagree on the trailing slash (Authentik has
+   * one, Keycloak and Authelia do not). A mismatch that is only that slash is
+   * retried with the provider's spelling instead of failing the login.
+   *
+   * @returns {Promise<object>}
+   */
+  async _discover(client, issuer, settings, options) {
+    try {
+      const discovered = await client.discovery(
         issuer,
         settings.clientId,
-        settings.clientSecret || undefined,
+        undefined,
         undefined,
         options
-      )
-      .catch((error) => {
-        if (this._clientConfigKey === key) {
-          this._clientConfigPromise = null;
-          this._clientConfigKey = null;
-        }
+      );
+      return discovered.serverMetadata();
+    } catch (error) {
+      const advertised = error?.cause?.body?.issuer;
+      const differsOnlyBySlash =
+        error?.code === 'OAUTH_JSON_ATTRIBUTE_COMPARISON_FAILED' &&
+        typeof advertised === 'string' &&
+        stripTrailingSlash(advertised) === stripTrailingSlash(issuer.href);
+      if (!differsOnlyBySlash) {
         throw error;
-      });
-
-    return this._clientConfigPromise;
+      }
+      const discovered = await client.discovery(
+        new URL(advertised),
+        settings.clientId,
+        undefined,
+        undefined,
+        options
+      );
+      return discovered.serverMetadata();
+    }
   }
 
   /**
@@ -194,7 +350,7 @@ class OidcService {
 
     const url = client.buildAuthorizationUrl(clientConfig, {
       redirect_uri: redirectUri,
-      scope: settings.scopes,
+      scope: resolveScopes(settings, clientConfig.serverMetadata()),
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
       state,
@@ -356,3 +512,5 @@ module.exports = new OidcService();
 module.exports.CALLBACK_PATH = CALLBACK_PATH;
 module.exports.readClaim = readClaim;
 module.exports.toGroupList = toGroupList;
+module.exports.selectTokenAuthMethod = selectTokenAuthMethod;
+module.exports.resolveScopes = resolveScopes;

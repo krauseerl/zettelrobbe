@@ -384,6 +384,8 @@ const getOidcConfig = () => ({
   clientId: String(process.env.OIDC_CLIENT_ID || '').trim(),
   clientSecret: String(process.env.OIDC_CLIENT_SECRET || ''),
   redirectUri: String(process.env.OIDC_REDIRECT_URI || '').trim(),
+  // client_secret_basic | client_secret_post | none; empty = automatic.
+  tokenAuthMethod: String(process.env.OIDC_TOKEN_AUTH_METHOD || '').trim(),
   scopes: String(process.env.OIDC_SCOPES || 'openid profile email').trim(),
   usernameClaim: String(
     process.env.OIDC_USERNAME_CLAIM || 'preferred_username'

@@ -71,6 +71,10 @@ function startFakeProvider() {
     // code -> authorization request parameters
     codes: new Map(),
     lastTokenRequest: null,
+    // Advertised in discovery and enforced at the token endpoint, the way
+    // Authelia only accepts the method registered for the client.
+    authMethods: ['client_secret_basic', 'client_secret_post'],
+    lastAuthMethod: null,
   };
 
   const server = http.createServer((req, res) => {
@@ -92,10 +96,7 @@ function startFakeProvider() {
         subject_types_supported: ['public'],
         id_token_signing_alg_values_supported: ['RS256'],
         code_challenge_methods_supported: ['S256'],
-        token_endpoint_auth_methods_supported: [
-          'client_secret_post',
-          'client_secret_basic',
-        ],
+        token_endpoint_auth_methods_supported: provider.authMethods,
       });
     }
 
@@ -109,6 +110,26 @@ function startFakeProvider() {
       req.on('end', () => {
         const params = new URLSearchParams(raw);
         provider.lastTokenRequest = params;
+
+        // RFC 6749 2.3.1: Basic credentials are form-urlencoded, then base64.
+        let clientId = params.get('client_id');
+        let clientSecret = params.get('client_secret');
+        let method = clientSecret ? 'client_secret_post' : 'none';
+        const authorization = req.headers.authorization || '';
+        if (authorization.startsWith('Basic ')) {
+          const decoded = Buffer.from(
+            authorization.slice(6),
+            'base64'
+          ).toString();
+          const separator = decoded.indexOf(':');
+          clientId = decodeURIComponent(decoded.slice(0, separator));
+          clientSecret = decodeURIComponent(decoded.slice(separator + 1));
+          method = 'client_secret_basic';
+        }
+        provider.lastAuthMethod = method;
+        if (!provider.authMethods.includes(method)) {
+          return send(401, { error: 'invalid_client' });
+        }
         const grant = provider.codes.get(params.get('code'));
         provider.codes.delete(params.get('code'));
         if (!grant) return send(400, { error: 'invalid_grant' });
@@ -118,8 +139,8 @@ function startFakeProvider() {
           .update(params.get('code_verifier') || '')
           .digest('base64url');
         if (
-          params.get('client_id') !== CLIENT_ID ||
-          params.get('client_secret') !== CLIENT_SECRET ||
+          clientId !== CLIENT_ID ||
+          clientSecret !== CLIENT_SECRET ||
           params.get('redirect_uri') !== grant.redirectUri ||
           challenge !== grant.codeChallenge
         ) {
@@ -461,11 +482,133 @@ function cookieValue(response, name) {
     }
   });
 
+  // ── 6b. Provider differences ──────────────────────────────────────────────
+  const oidcServiceForReset = require(
+    path.join(REPO_ROOT, 'services', 'oidcService.js')
+  );
+  const resetDiscovery = () => {
+    oidcServiceForReset._clientConfigPromise = null;
+    oidcServiceForReset._clientConfigKey = null;
+  };
+  async function fullLogin() {
+    const { tx, code, state } = await beginLogin();
+    return get(
+      `/auth/oidc/callback?code=${code}&state=${state}`,
+      `zr_oidc_tx=${tx}`
+    );
+  }
+  provider.user = {
+    sub: 'u-1',
+    preferred_username: 'admin',
+    groups: ['zettelrobbe-users'],
+  };
+
+  await test('client_secret_basic is the default when the provider offers it', async () => {
+    resetDiscovery();
+    provider.authMethods = ['client_secret_basic'];
+    try {
+      const res = await fullLogin();
+      assert.strictEqual(res.status, 302);
+      assert.strictEqual(provider.lastAuthMethod, 'client_secret_basic');
+    } finally {
+      provider.authMethods = ['client_secret_basic', 'client_secret_post'];
+      resetDiscovery();
+    }
+  });
+
+  await test('client_secret_post is used when it is all the provider lists', async () => {
+    resetDiscovery();
+    provider.authMethods = ['client_secret_post'];
+    try {
+      const res = await fullLogin();
+      assert.strictEqual(res.status, 302);
+      assert.strictEqual(provider.lastAuthMethod, 'client_secret_post');
+    } finally {
+      provider.authMethods = ['client_secret_basic', 'client_secret_post'];
+      resetDiscovery();
+    }
+  });
+
+  await test('OIDC_TOKEN_AUTH_METHOD overrides the automatic choice', async () => {
+    process.env.OIDC_TOKEN_AUTH_METHOD = 'client_secret_post';
+    try {
+      const res = await fullLogin();
+      assert.strictEqual(res.status, 302);
+      assert.strictEqual(provider.lastAuthMethod, 'client_secret_post');
+    } finally {
+      delete process.env.OIDC_TOKEN_AUTH_METHOD;
+    }
+  });
+
+  await test('an unknown OIDC_TOKEN_AUTH_METHOD fails the login start', async () => {
+    process.env.OIDC_TOKEN_AUTH_METHOD = 'private_key_jwt';
+    try {
+      const res = await get('/auth/oidc/login');
+      assert.strictEqual(res.status, 502);
+    } finally {
+      delete process.env.OIDC_TOKEN_AUTH_METHOD;
+    }
+  });
+
+  await test('an issuer without the trailing slash the provider uses still works', async () => {
+    process.env.OIDC_ISSUER_URL = provider.issuer.replace(/\/$/, '');
+    try {
+      const res = await fullLogin();
+      assert.strictEqual(res.status, 302);
+      assert.strictEqual(res.headers.get('location'), '/dashboard');
+    } finally {
+      process.env.OIDC_ISSUER_URL = provider.issuer;
+    }
+  });
+
+  await test('the full discovery URL is accepted as OIDC_ISSUER_URL', async () => {
+    process.env.OIDC_ISSUER_URL = `${provider.issuer}.well-known/openid-configuration`;
+    try {
+      const res = await fullLogin();
+      assert.strictEqual(res.status, 302);
+      assert.strictEqual(res.headers.get('location'), '/dashboard');
+    } finally {
+      process.env.OIDC_ISSUER_URL = provider.issuer;
+    }
+  });
+
+  await test('an issuer that differs by more than a slash is refused', async () => {
+    process.env.OIDC_ISSUER_URL = `${provider.base}/application/o/zr/other/`;
+    try {
+      const res = await get('/auth/oidc/login');
+      assert.strictEqual(res.status, 502);
+    } finally {
+      process.env.OIDC_ISSUER_URL = provider.issuer;
+    }
+  });
+
   // ── 7. authorize() ────────────────────────────────────────────────────────
   const oidcService = require(
     path.join(REPO_ROOT, 'services', 'oidcService.js')
   );
   const users = [{ id: 1, username: 'Admin' }];
+
+  await test('resolveScopes() adds "groups" only when needed and advertised', async () => {
+    const base = { scopes: 'openid profile email', allowedGroups: [] };
+    const withGroups = { ...base, allowedGroups: ['ops'] };
+    const advertised = { scopes_supported: ['openid', 'profile', 'groups'] };
+    assert.strictEqual(
+      oidcService.resolveScopes(base, advertised),
+      'openid profile email'
+    );
+    assert.strictEqual(
+      oidcService.resolveScopes(withGroups, advertised),
+      'openid profile email groups'
+    );
+    assert.strictEqual(
+      oidcService.resolveScopes(withGroups, { scopes_supported: ['openid'] }),
+      'openid profile email'
+    );
+    assert.strictEqual(
+      oidcService.resolveScopes({ scopes: 'profile', allowedGroups: [] }, {}),
+      'openid profile'
+    );
+  });
 
   await test('authorize() matches usernames case-insensitively', async () => {
     const result = oidcService.authorize(

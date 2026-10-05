@@ -71,11 +71,13 @@ services:
       # Keycloak, ... The identity is mapped onto the existing local account by
       # OIDC_USERNAME_CLAIM; password login keeps working.
       # - OIDC_ENABLED=yes
-      # - OIDC_ISSUER_URL=https://auth.example.com/application/o/zettelrobbe/
+      # OIDC_ISSUER_URL examples: Authentik https://auth.example.com/application/o/<slug>/,
+      # Authelia https://auth.example.com, Keycloak https://sso.example.com/realms/<realm>
+      # - OIDC_ISSUER_URL=https://auth.example.com
       # - OIDC_CLIENT_ID=your_client_id
       # - OIDC_CLIENT_SECRET=your_client_secret
       # - OIDC_REDIRECT_URI=https://zettelrobbe.example.com/auth/oidc/callback
-      # - OIDC_PROVIDER_NAME=Authentik
+      # - OIDC_PROVIDER_NAME=SSO
       # - OIDC_ALLOWED_GROUPS=zettelrobbe-users
     ports:
       - '3000:${PAPERLESS_AI_PORT:-3000}'
