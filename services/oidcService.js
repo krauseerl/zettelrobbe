@@ -60,6 +60,23 @@ function isValidEmail(value) {
 }
 
 /**
+ * True for an absolute http(s) URL. A redirect URI without its scheme
+ * ("app.example.com/auth/oidc/callback") is a common slip that every provider
+ * rejects with a redirect URI error.
+ *
+ * @param {string} value
+ * @returns {boolean}
+ */
+function isAbsoluteHttpUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    return url.protocol === 'https:' || url.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The issuer URL to discover. Operators often paste the full discovery URL
  * instead of the issuer; its well-known suffix is removed.
  *
@@ -215,6 +232,11 @@ class OidcService {
     }
     if (!settings.clientId) {
       errors.push('OIDC_CLIENT_ID is missing');
+    }
+    if (settings.redirectUri && !isAbsoluteHttpUrl(settings.redirectUri)) {
+      errors.push(
+        'OIDC_REDIRECT_URI must be an absolute URL starting with https:// or http://'
+      );
     }
     if (!isValidEmail(settings.adminEmail)) {
       errors.push('OIDC_ADMIN_EMAIL is missing or not an e-mail address');

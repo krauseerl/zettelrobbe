@@ -611,6 +611,22 @@ function cookieValue(response, name) {
     }
   });
 
+  await test('a redirect URI without its scheme keeps SSO off', async () => {
+    process.env.OIDC_REDIRECT_URI = 'app.example.com/auth/oidc/callback';
+    try {
+      assert.match(
+        oidcService.getConfigErrors().join(' | '),
+        /OIDC_REDIRECT_URI/
+      );
+      assert.strictEqual(oidcService.isEnabled(), false);
+      process.env.OIDC_REDIRECT_URI =
+        'https://app.example.com/auth/oidc/callback';
+      assert.deepStrictEqual(oidcService.getConfigErrors(), []);
+    } finally {
+      delete process.env.OIDC_REDIRECT_URI;
+    }
+  });
+
   await test('resolveScopes() always includes openid', async () => {
     assert.strictEqual(
       oidcService.resolveScopes({ scopes: 'openid profile email' }),
